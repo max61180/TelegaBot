@@ -1,10 +1,9 @@
 from telegram import Update
 from telegram.ext import (
     Application,
-    CommandHandler,
     MessageHandler,
-    filters,
-    ContextTypes
+    ContextTypes,
+    filters
 )
 import sqlite3
 import os
@@ -13,14 +12,16 @@ import asyncio
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# Настройка БД
+# Настройка БД (с асинхронной поддержкой)
 conn = sqlite3.connect('chats.db', check_same_thread=False)
 conn.execute('''CREATE TABLE IF NOT EXISTS user_chats
              (user_id TEXT PRIMARY KEY, chat_id TEXT)''')
 
-async def create_user_chat(user_id: str, bot):
-    chat = await bot.create_chat(title=f"Клиент {user_id}", type='private')
-    await bot.add_chat_members(chat.id, [ADMIN_ID])
+async def create_user_chat(bot, user_id: str):
+    chat = await bot.create_chat(
+        title=f"Клиент {user_id}",
+        user_ids=[ADMIN_ID]  # Приглашаем админа сразу
+    )
     conn.execute("INSERT OR REPLACE INTO user_chats VALUES (?, ?)", (user_id, chat.id))
     conn.commit()
     return chat.id
@@ -34,7 +35,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id = cursor.fetchone()
             
             if not chat_id:
-                chat_id = await create_user_chat(user_id, context.bot)
+                chat_id = await create_user_chat(context.bot, user_id)
             else:
                 chat_id = chat_id[0]
             
@@ -43,19 +44,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=text
             )
     except Exception as e:
-        print("Ошибка:", e)
+        print(f"Ошибка: {e}")
 
 async def main():
     # Создаем Application
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Добавляем обработчик сообщений
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Добавляем обработчик текстовых сообщений
+    application.add_handler(MessageHandler(filters.TEXT, handle_message))
     
     # Запускаем бота
     await application.initialize()
     await application.start()
-    print("Бот запущен!")
+    print("✅ Бот успешно запущен!")
     
     # Бесконечный цикл
     while True:
