@@ -9,6 +9,7 @@ from telegram.ext import (
     ContextTypes
 )
 
+# Настройка логов
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -20,70 +21,80 @@ ADMIN_ID = int(os.getenv('ADMIN_ID', '1642268174'))
 
 class ChatManager:
     def __init__(self):
-        self.user_chats = {}  # {user_id: chat_id}
+        self.active_chats = {}  # {user_id: chat_id}
 
     async def create_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Создает новый чат при нажатии кнопки"""
+        """Создает групповой чат для пользователя"""
         query = update.callback_query
         await query.answer()
         
         user_id = query.data.split('_')[1]
         
         try:
-            # Создаем новый чат (в реальности - приватный чат бота с админом)
-            chat = await context.bot.create_chat_invite_link(
-                chat_id=ADMIN_ID,
-                name=f"Чат с {user_id}"
+            # Создаем новую группу (бот + админ)
+            chat = await context.bot.create_new_chat_invite_link(
+                title=f"Чат с {user_id}",
+                user_ids=[ADMIN_ID]
             )
             
-            self.user_chats[user_id] = chat.invite_link
+            self.active_chats[user_id] = chat.chat.id
+            invite_link = await chat.chat.export_invite_link()
             
-            # Отправляем приглашение админу
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"🔹 Новый чат с {user_id}\n"
-                     f"Используйте эту ссылку: {chat.invite_link}",
+                text=f"🔹 Новый чат с {user_id}\nСсылка: {invite_link}",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Открыть чат", url=chat.invite_link)
+                    InlineKeyboardButton("Открыть чат", url=invite_link)
                 ]])
             )
             
-            # Уведомляем пользователя
             await query.edit_message_text(
-                text=f"✅ Чат создан! Оператор скоро свяжется",
+                text="✅ Чат создан! Оператор свяжется с вами в новом окне.",
                 reply_markup=None
             )
             
         except Exception as e:
             logger.error(f"Ошибка создания чата: {e}")
-            await query.edit_message_text("❌ Ошибка создания чата")
+            await query.edit_message_text("❌ Не удалось создать чат")
 
     async def forward_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Пересылает сообщения в нужный чат"""
+        """Пересылает сообщения в соответствующий чат"""
         if '👤' in update.message.text:
             user_id = update.message.text.split('👤 ')[1].split(':')[0]
             
-            if user_id in self.user_chats:
+            if user_id in self.active_chats:
                 await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=update.message.text,
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("Ответить в чате", url=self.user_chats[user_id])
-                    ]])
+                    chat_id=self.active_chats[user_id],
+                    text=update.message.text
                 )
 
 def main():
     chat_manager = ChatManager()
     
+    # Важные параметры для Render:
     app = ApplicationBuilder() \
         .token(BOT_TOKEN) \
+        .concurrent_updates(True) \  # Разрешаем параллельные запросы
+        .http_version('1.1') \  # Стабильная версия HTTP
+        .get_updates_http_version('1.1') \
         .build()
 
-    app.add_handler(CallbackQueryHandler(chat_manager.create_chat, pattern="^create_"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_manager.forward_message))
+    # Обработчики
+    app.add_handler(CallbackQueryHandler(
+        chat_manager.create_chat, 
+        pattern="^newchat_"
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND, 
+        chat_manager.forward_message
+    ))
 
-    logger.info("Бот запущен...")
-    app.run_polling()
+    logger.info("Бот запущен в режиме polling (Render-compatible)")
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        close_loop=False,  # Критично для Render!
+        stop_signals=[]    # Отключаем обработку сигналов остановки
+    )
 
 if __name__ == '__main__':
     main()
