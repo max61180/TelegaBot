@@ -1,10 +1,11 @@
 from telegram import Update, Bot, Chat
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler, MessageHandler
+from telegram.ext.filters import TEXT
 import sqlite3
 import os
 
-BOT_TOKEN = os.getenv("7768583912:AAEdz3fxwRAEE2IXW2lNdx5gwa1PDIKQa0o")  # Токен из настроек Render
-ADMIN_ID = os.getenv("@ElectroRepairBot")    # Ваш ID Telegram (@userinfobot)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
 # Настройка БД
 conn = sqlite3.connect('chats.db')
@@ -35,6 +36,6 @@ async def handle_message(update: Update, context):
         print("Ошибка:", e)
 
 updater = Updater(BOT_TOKEN)
-updater.dispatcher.add_handler(MessageHandler(Filters.text, handle_message))
+updater.dispatcher.add_handler(MessageHandler(TEXT, handle_message))
 updater.start_polling()
 print("Бот запущен!")
