@@ -24,76 +24,69 @@ class ChatManager:
         self.active_chats = {}  # {user_id: chat_id}
 
     async def create_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Создает групповой чат для пользователя"""
+        """Обработка кнопки 'Создать чат'"""
         query = update.callback_query
         await query.answer()
         
         user_id = query.data.split('_')[1]
         
         try:
-            # Создаем новую группу (бот + админ)
-            chat = await context.bot.create_new_chat_invite_link(
-                title=f"Чат с {user_id}",
-                user_ids=[ADMIN_ID]
+            # Создаем новый чат (в продакшене используйте create_forum_topic или create_supergroup)
+            chat = await context.bot.create_chat_invite_link(
+                chat_id=ADMIN_ID,
+                name=f"Чат с {user_id}"
             )
             
-            self.active_chats[user_id] = chat.chat.id
-            invite_link = await chat.chat.export_invite_link()
+            self.active_chats[user_id] = chat.invite_link
             
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"🔹 Новый чат с {user_id}\nСсылка: {invite_link}",
+                text=f"🔹 Новый чат с {user_id}\nСсылка: {chat.invite_link}",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Открыть чат", url=invite_link)
+                    InlineKeyboardButton("Открыть чат", url=chat.invite_link)
                 ]])
             )
             
-            await query.edit_message_text(
-                text="✅ Чат создан! Оператор свяжется с вами в новом окне.",
-                reply_markup=None
-            )
+            await query.edit_message_text("✅ Чат создан! Оператор свяжется с вами.")
             
         except Exception as e:
             logger.error(f"Ошибка создания чата: {e}")
-            await query.edit_message_text("❌ Не удалось создать чат")
+            await query.edit_message_text("❌ Ошибка создания чата")
 
     async def forward_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Пересылает сообщения в соответствующий чат"""
-        if '👤' in update.message.text:
+        """Пересылка сообщений"""
+        if update.message and '👤' in update.message.text:
             user_id = update.message.text.split('👤 ')[1].split(':')[0]
             
             if user_id in self.active_chats:
                 await context.bot.send_message(
-                    chat_id=self.active_chats[user_id],
-                    text=update.message.text
+                    chat_id=ADMIN_ID,
+                    text=update.message.text,
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("Ответить", url=self.active_chats[user_id])
+                    ]])
                 )
 
 def main():
     chat_manager = ChatManager()
     
-    # Важные параметры для Render:
-    app = ApplicationBuilder() \
-        .token(BOT_TOKEN) \
-        .concurrent_updates(True) \  # Разрешаем параллельные запросы
-        .http_version('1.1') \  # Стабильная версия HTTP
-        .get_updates_http_version('1.1') \
-        .build()
+    # Инициализация бота (без переносов строк)
+    app = (ApplicationBuilder()
+           .token(BOT_TOKEN)
+           .concurrent_updates(True)  # Разрешаем параллельные запросы
+           .http_version('1.1')
+           .get_updates_http_version('1.1')
+           .build())
 
-    # Обработчики
-    app.add_handler(CallbackQueryHandler(
-        chat_manager.create_chat, 
-        pattern="^newchat_"
-    ))
-    app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND, 
-        chat_manager.forward_message
-    ))
+    # Регистрация обработчиков
+    app.add_handler(CallbackQueryHandler(chat_manager.create_chat, pattern="^newchat_"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_manager.forward_message))
 
-    logger.info("Бот запущен в режиме polling (Render-compatible)")
+    logger.info("Бот запущен (Render-compatible mode)")
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        close_loop=False,  # Критично для Render!
-        stop_signals=[]    # Отключаем обработку сигналов остановки
+        close_loop=False,
+        stop_signals=[]
     )
 
 if __name__ == '__main__':
