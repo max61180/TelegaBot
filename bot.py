@@ -2,7 +2,7 @@ import os
 import sqlite3
 import asyncio
 import threading
-from telegram import Update, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from fastapi import FastAPI
 import uvicorn
@@ -15,76 +15,66 @@ PORT = int(os.environ.get("PORT", 8000))
 # Инициализация
 app = FastAPI()
 conn = sqlite3.connect('chats.db', check_same_thread=False)
-conn.execute('''CREATE TABLE IF NOT EXISTS user_chats
-             (user_id TEXT PRIMARY KEY, chat_id TEXT, admin_chat_id TEXT)''')
-
-@app.get("/")
-def health_check():
-    return {"status": "Bot is running"}
+conn.execute('''CREATE TABLE IF NOT EXISTS chats
+             (user_id TEXT PRIMARY KEY, chat_id TEXT, status TEXT)''')
 
 async def accept_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
+    
+    user_id = query.data.split('_')[1]
+    admin_chat_id = str(query.message.chat.id)
+    
     try:
-        user_id = query.data.split('_')[1]
-        
-        # Создаем новый чат между ботом и администратором
-        chat = await context.bot.create_chat_invite_link(
-            chat_id=ADMIN_ID,
-            name=f"Чат с {user_id}"
-        )
-        
-        # Сохраняем данные
-        conn.execute("INSERT OR REPLACE INTO user_chats VALUES (?, ?, ?)",
-                    (user_id, str(chat.chat.id), str(query.message.chat.id)))
+        # Создаем новый чат (в реальности используем текущий чат с админом)
+        conn.execute("INSERT OR REPLACE INTO chats VALUES (?, ?, ?)",
+                    (user_id, admin_chat_id, "active"))
         conn.commit()
         
-        # Отправляем подтверждение
-        await query.answer("Чат создан!")
-        await context.bot.send_message(
-            chat_id=chat.chat.id,
-            text=f"🔹 Чат с пользователем {user_id} создан\n\n"
-                 "Отправьте сюда сообщение для пользователя:"
-        )
+        # Удаляем кнопку "Принять"
+        await query.edit_message_reply_markup(reply_markup=None)
         
-        # Уведомляем пользователя
+        # Отправляем подтверждение
         await context.bot.send_message(
-            chat_id=int(ADMIN_ID),
-            text=f"👤 Пользователь {user_id} ожидает ответа в новом чате"
+            chat_id=admin_chat_id,
+            text=f"✅ Чат с {user_id} активирован\nОтправьте сообщение:"
         )
         
     except Exception as e:
-        print(f"Error in accept_chat: {e}")
-        await query.answer("Ошибка создания чата")
+        print(f"Error accepting chat: {e}")
+        await context.bot.send_message(
+            chat_id=admin_chat_id,
+            text="❌ Ошибка при активации чата"
+        )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not update.message or not update.message.text:
             return
             
-        # Сообщения от пользователя
+        # Сообщения от пользователей (формат "👤 user-123: текст")
         if '👤' in update.message.text:
             user_id = update.message.text.split('👤 ')[1].split(':')[0]
-            data = conn.execute(
-                "SELECT chat_id, admin_chat_id FROM user_chats WHERE user_id = ?",
-                (user_id,)
-            ).fetchone()
             
-            if data:
-                # Пересылаем в созданный чат
-                await context.bot.send_message(
-                    chat_id=int(data[0]),
-                    text=update.message.text
-                )
-            else:
-                # Предлагаем создать чат
+            # Проверяем статус чата
+            cursor = conn.execute("SELECT status FROM chats WHERE user_id = ?", (user_id,))
+            chat_status = cursor.fetchone()
+            
+            if not chat_status:
+                # Если чат не принят, предлагаем кнопку
+                keyboard = [[InlineKeyboardButton("✅ Принять чат", callback_data=f"accept_{user_id}")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
                     text=f"Новый запрос от {user_id}:\n{update.message.text}",
-                    reply_markup={
-                        "inline_keyboard": [[
-                            {"text": "✅ Создать чат", "callback_data": f"accept_{user_id}"}
-                        ]]
-                    }
+                    reply_markup=reply_markup
+                )
+            elif chat_status[0] == "active":
+                # Если чат активен, пересылаем сообщение
+                await context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=update.message.text
                 )
                 
     except Exception as e:
