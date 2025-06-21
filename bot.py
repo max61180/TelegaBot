@@ -3,8 +3,8 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 import sqlite3
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Токен из настроек Render
-ADMIN_ID = os.getenv("ADMIN_ID")    # Ваш ID Telegram (@userinfobot)
+BOT_TOKEN = os.getenv("7768583912:AAEdz3fxwRAEE2IXW2lNdx5gwa1PDIKQa0o")  # Токен из настроек Render
+ADMIN_ID = os.getenv("@ElectroRepairBot")    # Ваш ID Telegram (@userinfobot)
 
 # Настройка БД
 conn = sqlite3.connect('chats.db')
