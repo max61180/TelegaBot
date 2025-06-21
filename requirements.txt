@@ -1,2 +1,4 @@
-python-telegram-bot>=22.0
-python-dotenv>=1.0.0  # Для загрузки переменных окружения (опционально)
+python-telegram-bot>=20.0
+fastapi>=0.68.0
+uvicorn>=0.15.0
+python-dotenv>=1.0.0
