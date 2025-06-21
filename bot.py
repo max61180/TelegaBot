@@ -9,7 +9,6 @@ from telegram.ext import (
     ContextTypes
 )
 
-# Настройка логов
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -21,72 +20,84 @@ ADMIN_ID = int(os.getenv('ADMIN_ID', '1642268174'))
 
 class ChatManager:
     def __init__(self):
-        self.active_chats = {}  # {user_id: chat_id}
+        self.active_chats = {}  # {user_id: chat_title}
 
-    async def create_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка кнопки 'Создать чат'"""
+    async def create_group_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Создает новую группу для общения"""
         query = update.callback_query
         await query.answer()
         
         user_id = query.data.split('_')[1]
+        chat_title = f"Чат с {user_id}"
         
         try:
-            # Создаем новый чат (в продакшене используйте create_forum_topic или create_supergroup)
-            chat = await context.bot.create_chat_invite_link(
-                chat_id=ADMIN_ID,
-                name=f"Чат с {user_id}"
+            # Создаем новую группу
+            chat = await context.bot.create_new_chat(
+                title=chat_title,
+                user_ids=[ADMIN_ID]  # Бот автоматически добавляется как администратор
             )
             
-            self.active_chats[user_id] = chat.invite_link
+            self.active_chats[user_id] = chat.title
+            
+            # Получаем ссылку-приглашение
+            invite_link = await chat.export_invite_link()
             
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=f"🔹 Новый чат с {user_id}\nСсылка: {chat.invite_link}",
+                text=f"🔹 Создана новая группа: {chat_title}\n"
+                     f"Ссылка для присоединения: {invite_link}",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Открыть чат", url=chat.invite_link)
+                    InlineKeyboardButton("Открыть чат", url=invite_link)
                 ]])
             )
             
-            await query.edit_message_text("✅ Чат создан! Оператор свяжется с вами.")
+            await query.edit_message_text(
+                text="✅ Групповой чат создан! Оператор свяжется с вами.",
+                reply_markup=None
+            )
             
         except Exception as e:
-            logger.error(f"Ошибка создания чата: {e}")
-            await query.edit_message_text("❌ Ошибка создания чата")
+            logger.error(f"Ошибка создания группы: {e}")
+            await query.edit_message_text("❌ Не удалось создать групповой чат")
 
-    async def forward_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Пересылка сообщений"""
+    async def forward_to_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Пересылает сообщения в группу"""
         if update.message and '👤' in update.message.text:
             user_id = update.message.text.split('👤 ')[1].split(':')[0]
             
             if user_id in self.active_chats:
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=update.message.text,
+                    text=f"Сообщение из чата '{self.active_chats[user_id]}':\n{update.message.text}",
                     reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("Ответить", url=self.active_chats[user_id])
+                        InlineKeyboardButton(
+                            "Перейти в чат",
+                            url=f"https://t.me/{self.active_chats[user_id].replace(' ', '_')}"
+                        )
                     ]])
                 )
 
 def main():
     chat_manager = ChatManager()
     
-    # Инициализация бота (без переносов строк)
     app = (ApplicationBuilder()
            .token(BOT_TOKEN)
-           .concurrent_updates(True)  # Разрешаем параллельные запросы
-           .http_version('1.1')
-           .get_updates_http_version('1.1')
+           .concurrent_updates(True)
            .build())
 
-    # Регистрация обработчиков
-    app.add_handler(CallbackQueryHandler(chat_manager.create_chat, pattern="^newchat_"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat_manager.forward_message))
+    app.add_handler(CallbackQueryHandler(
+        chat_manager.create_group_chat,
+        pattern="^newchat_"
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        chat_manager.forward_to_group
+    ))
 
-    logger.info("Бот запущен (Render-compatible mode)")
+    logger.info("Бот запущен в режиме групповых чатов")
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        close_loop=False,
-        stop_signals=[]
+        close_loop=False
     )
 
 if __name__ == '__main__':
