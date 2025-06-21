@@ -1,7 +1,8 @@
 import os
 import sqlite3
 import asyncio
-from telegram import Update, Bot
+import threading  # Добавлен этот импорт
+from telegram import Update
 from telegram.ext import (
     Application,
     MessageHandler,
@@ -17,12 +18,16 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_ID = int(os.environ["ADMIN_ID"])
 PORT = int(os.environ.get("PORT", 8000))
 
+# Проверка конфигурации
+assert BOT_TOKEN, "BOT_TOKEN не задан"
+assert ADMIN_ID, "ADMIN_ID не задан"
+
 # Инициализация FastAPI
 app = FastAPI()
 
 @app.get("/")
 def health_check():
-    return {"status": "Bot is running"}
+    return {"status": "Bot is running", "admin_id": ADMIN_ID}
 
 # Инициализация БД
 def init_db():
@@ -34,42 +39,37 @@ def init_db():
 conn = init_db()
 
 async def handle_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик кнопки принятия чата"""
     query = update.callback_query
     try:
-        # Извлекаем user_id из callback_data (формат: "accept_USER123")
         user_id = query.data.split('_')[1]
         
-        # Сохраняем связь user_id и текущего чата (куда нажали кнопку)
+        # Сохраняем связь user_id → chat_id
         conn.execute("INSERT OR REPLACE INTO user_chats VALUES (?, ?)", 
                     (user_id, str(query.message.chat.id)))
         conn.commit()
         
-        # Отправляем подтверждение
-        await query.answer()
+        await query.answer(f"Чат с {user_id} принят")
         await context.bot.send_message(
             chat_id=query.message.chat.id,
             text=f"✅ Вы приняли чат с {user_id}\nТеперь все сообщения будут приходить сюда."
         )
-        
-        # Отправляем уведомление пользователю (если реализован механизм обратной связи)
     except Exception as e:
-        print(f"❌ Ошибка в handle_accept_callback: {e}")
-        await query.answer("Ошибка при принятии чата")
+        print(f"❌ Ошибка при принятии чата: {e}")
+        await query.answer("Произошла ошибка")
 
 async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик входящих сообщений"""
     try:
         if not update.message or not update.message.text:
             return
             
-        # Игнорируем сообщения от самого бота
+        # Игнорируем сообщения от бота
         if update.message.from_user.id == context.bot.id:
             return
             
-        # Если сообщение содержит метку пользователя (👤 user-123e4567)
         if '👤' in update.message.text:
             user_id = update.message.text.split('👤 ')[1].split(':')[0]
-            
-            # Ищем chat_id в базе данных
             cursor = conn.execute(
                 "SELECT chat_id FROM user_chats WHERE user_id = ?", 
                 (user_id,)
@@ -77,16 +77,16 @@ async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             chat_data = cursor.fetchone()
             
             if chat_data:
-                # Пересылаем сообщение в сохраненный чат
+                # Пересылаем в существующий чат
                 await context.bot.send_message(
                     chat_id=int(chat_data[0]),
                     text=update.message.text
                 )
             else:
-                # Если чат еще не принят, предлагаем принять
+                # Предлагаем администратору принять чат
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=f"Новый запрос чата от {user_id}:\n\n{update.message.text}",
+                    text=f"🔔 Новый запрос чата от {user_id}:\n\n{update.message.text}",
                     reply_markup={
                         "inline_keyboard": [[
                             {
@@ -97,12 +97,12 @@ async def handle_new_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     }
                 )
     except Exception as e:
-        print(f"❌ Ошибка в handle_new_message: {e}")
+        print(f"❌ Ошибка обработки сообщения: {e}")
 
 async def run_bot():
+    """Запуск Telegram бота"""
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Регистрируем обработчики
     application.add_handler(CallbackQueryHandler(
         handle_accept_callback, 
         pattern="^accept_"
@@ -114,13 +114,14 @@ async def run_bot():
     
     await application.initialize()
     await application.start()
-    print(f"🤖 Бот запущен. Админ: {ADMIN_ID}")
+    print(f"🤖 Бот запущен. Админ ID: {ADMIN_ID}")
     
     while True:
         await asyncio.sleep(3600)
 
 async def main():
-    # HTTP-сервер для Render
+    """Запуск всех компонентов"""
+    # HTTP-сервер в отдельном потоке
     server = threading.Thread(
         target=uvicorn.run,
         kwargs={"app": app, "host": "0.0.0.0", "port": PORT},
@@ -128,11 +129,12 @@ async def main():
     )
     server.start()
     
+    # Основной бот
     await run_bot()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except Exception as e:
-        print(f"🚨 FATAL ERROR: {e}")
+        print(f"🚨 Критическая ошибка: {e}")
         exit(1)
